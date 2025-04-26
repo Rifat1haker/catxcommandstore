@@ -6,9 +6,9 @@ const archiver = require('archiver');
 
 module.exports.config = {
     name: "file",
-    aliases: ["fl"],
-    version: "1.1.4",
-    author: "Niiozic Team - LocDev",
+    aliases: ["files"],
+    version: "1.0",
+    author: "Mueid Mursalin Rifat",
     countDown: 0,
     role: 2,
     shortDescription: "File management command",
