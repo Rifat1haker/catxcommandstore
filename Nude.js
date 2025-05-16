@@ -1,19 +1,19 @@
 module.exports = {
 	config: {
 		name: "nude",
-		aliases: ["nangai"],
+		aliases: ["nude"],
 		version: "1.0",
-		author: "OtinXSandip",
+		author: "MMRifat",
 		countDown: 5,
-		role: 2,
-		shortDescription: "send you pic of nude",
-		longDescription: "sends u pic of girls nude",
+		role: 1,
+		shortDescription: "send you a nude photos",
+		longDescription: "",
 		category: "18+",
 		guide: "{pn}"
 	},
 
 	onStart: async function ({ message }) {
-	 var link = [ 
+	 var link = [
 "https://i.imgur.com/T5BPkRG.jpg",
 "https://i.imgur.com/69MT3Wg.jpg",
 "https://i.imgur.com/z6EtvVm.jpg",
@@ -109,7 +109,7 @@ module.exports = {
 	]
 let img = link[Math.floor(Math.random()*link.length)]
 message.send({
-	body: '「 Sugar Mumma Ahh💦🥵 」',attachment: await global.utils.getStreamFromURL(img)
+	body: '「 Here is your Babe😻 」',attachment: await global.utils.getStreamFromURL(img)
 })
 }
-     }
+}
