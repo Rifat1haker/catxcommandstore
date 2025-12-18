@@ -1,220 +1,238 @@
-const yts = require("yt-search");
 const axios = require("axios");
+const yts = require("yt-search");
 const fs = require("fs-extra");
 const path = require("path");
-
-const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 module.exports = {
   config: {
     name: "yt",
-    version: "1.5",
-    author: "Nyx",
+    aliases: ["yta", "ytb"],
+    version: "3.0",
+    author: "Mueid Mursalin Rifat 😺",
     countDown: 5,
     role: 0,
-    description: {
-      en: "Search and download YouTube videos or audio (under 10 minutes)"
-    },
-    category: "MEDIA",
+    shortDescription: "🎵 YouTube downloader",
+    longDescription: "Search and download YouTube audio (-a) or video (-v) with quality selection.",
+    category: "media",
     guide: {
-      en: "{pn} [video|-v] [<video name>]: Search and download video from YouTube\n" +
-        "{pn} [audio|-a] [<video name>]: Search and download audio from YouTube\n" +
-        "{pn} [info|-i] [<video name>]: Get video information from YouTube\n" +
-        "{pn} [url|-u] [<video url>] [video|-v | audio|-a]: Download video or audio from URL"
+      en: "{pn} <query/link> -a (audio)\n{pn} <query/link> -v (video) [quality]\n\nQuality options: 144, 360, 480, 720, 1080 (default: 480p)\n\nReply with 1-5 to download.\n\nExamples:\n{prefix}yt song name -a\n{prefix}yt https://youtube.com/watch?v=... -v 720\n{prefix}yt song name -v 1080"
     }
   },
-  
-  onStart: async function({ args, message, event, commandName, api }) {
-    const type = args[0];
-    const query = args.slice(1).join(" ");
-    
-    if (!type || !query) {
-      return message.reply("Please specify the type and query.");
-    }
-    
-    if (type === "-u" || type === "url") {
-      const url = args[1];
-      const action = args[2];
-      
-      if (!url || !action) {
-        return message.reply("Please provide a valid URL and action.");
-      }
-      
-      if (action === "-v" || action === "video") {
-        await downloadVideo(url, message);
-      } else if (action === "-a" || action === "audio") {
-        const videoId = extractVideoId(url);
-        await downloadYouTubeAudio(videoId, message);
-      } else {
-        return message.reply("Invalid action. Use -v for video or -a for audio.");
+
+  onStart: async function ({ message, event, args, api }) {
+    const raw = args.join(" ");
+    if (!raw) return message.reply("❗ Use: yt <query/link> -a or -v [quality]");
+
+    const isAudio = raw.includes("-a");
+    const isVideo = raw.includes("-v");
+
+    if (!isAudio && !isVideo)
+      return message.reply("❗ Please use `-a` for audio or `-v` for video.");
+
+    // Extract quality from command (only for video)
+    let quality = "480"; // Default quality
+    if (isVideo) {
+      const qualityMatch = raw.match(/\b(144|360|480|720|1080)\b/);
+      if (qualityMatch) {
+        quality = qualityMatch[1];
       }
     }
-    else if (type === "-v" || type === "video" || type === "-a" || type === "audio" || type === "-i" || type === "info") {
-      const loadingMessage = await message.reply(`${spinner[0]} Searching...`);
-      let currentFrame = 0;
-      const intervalId = setInterval(async () => {
-        currentFrame = (currentFrame + 1) % spinner.length;
-        await api.editMessage(`${spinner[currentFrame]} Searching...`, loadingMessage.messageID);
-      }, 200);
-      
-      try {
-        const searchResults = await searchYouTube(query);
-        
-        clearInterval(intervalId);
-        await api.unsendMessage(loadingMessage.messageID);
-        
-        if (searchResults.length === 0) {
-          return message.reply("⛔ No results found.");
-        }
-        
-        if (type === "-i" || type === "info") {
-          const firstVideo = searchResults[0];
-          const videoInfo = await getVideoInfo(firstVideo.id);
-          return message.reply({
-            body: `Title: ${videoInfo.title}\nDuration: ${videoInfo.duration}\nViews: ${videoInfo.views}\nUpload Date: ${videoInfo.uploadDate}\nURL: ${firstVideo.url}`,
-            attachment: await getStreamFromURL(videoInfo.thumbnail)
+
+    const mode = isAudio ? "ytmp3" : "ytmp4";
+    // Remove all flags and quality numbers
+    const query = raw.replace(/-a|-v|\b(144|360|480|720|1080)\b/g, "").trim();
+
+    if (!query) return message.reply("❗ Please provide a search query or YouTube URL.");
+
+    // Handle direct URL download
+    if (/^https?:\/\/(www\.)?(youtube\.com|youtu\.be)/.test(query)) {
+      const wait = await message.reply(`⏳ Downloading ${isAudio ? "audio" : `video (${quality}p)`}, please wait...`);
+      await handleDownload(query, mode, message, wait.messageID, isVideo ? quality : null);
+      return;
+    }
+
+    try {
+      const res = await yts(query);
+      const videos = res.videos.slice(0, 5);
+      if (videos.length === 0) return message.reply("❌ No results found.");
+
+      let body = `🎬 Results for: "${query}"\nReply with 1-5 to download ${isAudio ? "MP3" : `MP4 (${quality}p)`}\n\n`;
+      for (let i = 0; i < videos.length; i++) {
+        body += `${i + 1}. ${videos[i].title} (${videos[i].timestamp})\nBy: ${videos[i].author.name}\n\n`;
+      }
+
+      const attachments = [];
+      for (let i = 0; i < videos.length; i++) {
+        const img = await axios.get(videos[i].thumbnail, { responseType: "stream" });
+        const tempPath = path.join(__dirname, "cache", `yt-thumb-${i}-${Date.now()}.jpg`);
+        const writer = fs.createWriteStream(tempPath);
+        img.data.pipe(writer);
+        await new Promise(res => writer.on("finish", res));
+        attachments.push(fs.createReadStream(tempPath));
+      }
+
+      api.sendMessage({
+        body: body + `🔰 Api: ALI KOJA | Dev: Mueid Mursalin Rifat 😺`,
+        attachment: attachments
+      }, event.threadID, (err, info) => {
+        if (err) {
+          console.error("Send message error:", err);
+          attachments.forEach(file => {
+            try { fs.unlinkSync(file.path); } catch (e) {}
           });
+          return;
         }
-        
-        const limitedResults = searchResults.slice(0, 5);
-        
-        const messageBody = limitedResults.map((result, index) =>
-          `${index + 1}. ${result.title}\n`
-        ).join("\n");
-        
-        const listMessage = await message.reply({
-          body: `🎬 Please choose a track:\n\n${messageBody}`,
-          attachment: await Promise.all(limitedResults.map(result => getStreamFromURL(result.thumbnail)))
+
+        attachments.forEach(file => {
+          try { fs.unlinkSync(file.path); } catch (e) {}
         });
-        
-        global.GoatBot.onReply.set(listMessage.messageID, {
-          commandName,
-          messageID: listMessage.messageID,
+
+        const sentMsgID = info.messageID || info.messageID || info?.messageID || info?.message_id;
+        console.log("Sent message ID:", sentMsgID);
+
+        setTimeout(() => {
+          try {
+            console.log("Trying to unsend message:", sentMsgID);
+            api.unsendMessage(sentMsgID);
+          } catch (e) {
+            console.error("Failed to unsend message:", e);
+          }
+        }, 20000);
+
+        global.GoatBot.onReply.set(sentMsgID, {
+          commandName: "yt",
+          messageID: sentMsgID,
           author: event.senderID,
-          searchResults: limitedResults,
-          type
+          type: "yt-reply",
+          data: videos,
+          mode,
+          quality: isVideo ? quality : null
         });
-        
-      } catch (error) {
-        clearInterval(intervalId);
-        await api.unsendMessage(loadingMessage.messageID);
-        await message.reply(`❌ Error occurred during search: ${error.message}`);
-      }
+      });
+
+    } catch (e) {
+      console.error("Search error:", e);
+      message.reply("⚠️ Failed to search YouTube.");
     }
   },
-  
-  onReply: async ({ event, api, Reply, message }) => {
-    const { searchResults, type } = Reply;
-    const choice = parseInt(event.body);
-    
-    if (!isNaN(choice) && choice >= 1 && choice <= searchResults.length) {
-      const selectedTrack = searchResults[choice - 1];
-      await api.unsendMessage(Reply.messageID);
-      const loadingMessage = await message.reply(`${spinner[0]} Downloading...`);
-      let currentFrame = 0;
-      const intervalId = setInterval(async () => {
-        currentFrame = (currentFrame + 1) % spinner.length;
-        await api.editMessage(`${spinner[currentFrame]} Downloading...`, loadingMessage.messageID);
-      }, 200);
-      
-      try {
-        if (type === "-v" || type === "video") {
-          await downloadVideo(selectedTrack.url, message);
-        } else if (type === "-a" || type === "audio") {
-          const videoId = extractVideoId(selectedTrack.url);
-          await downloadYouTubeAudio(videoId, message);
-        }
-        
-        clearInterval(intervalId);
-        await api.unsendMessage(loadingMessage.messageID);
-        await api.unsendMessage(Reply.messageID);
-      } catch (error) {
-        clearInterval(intervalId);
-        await api.unsendMessage(loadingMessage.messageID);
-        await message.reply(`❌ Download failed: ${error.message}`);
-      }
-    } else {
-      await message.reply("❌ Invalid selection. Please choose a valid number.");
-    }
+
+  onReply: async function ({ event, message, Reply, api }) {
+    const { type, author, data, mode, quality, messageID } = Reply;
+    if (event.senderID !== author) return;
+
+    const index = parseInt(event.body);
+    if (isNaN(index) || index < 1 || index > data.length)
+      return message.reply("❗ Reply with a number from 1–5.");
+
+    const selected = data[index - 1];
+
+    try {
+      api.unsendMessage(messageID);
+    } catch (e) {}
+
+    const wait = await message.reply(`⏳ Downloading ${mode === "ytmp3" ? "audio" : `video (${quality}p)`}, please wait...`);
+    await handleDownload(selected.url, mode, message, wait.messageID, quality);
   }
 };
 
-async function searchYouTube(query) {
-  const searchResults = await yts(query);
-  return searchResults.videos
-    .filter(video => {
-      const duration = video.duration.seconds;
-      return duration <= 600;
-    })
-    .map(video => ({
-      id: video.videoId,
-      title: video.title,
-      duration: video.duration.timestamp,
-      thumbnail: video.thumbnail,
-      url: `https://www.youtube.com/watch?v=${video.videoId}`
-    }));
-}
-async function downloadVideo(url, message) {
+// 📥 Download Handler with Quality Support
+async function handleDownload(url, type, message, waitMsgID, quality = null) {
   try {
-    const response = await axios.get(`https://www.noobz-api.rf.gd/api/ytv?d=${encodeURIComponent(url)}&type=mp4`);
-    const videoUrl = response.data.url;
-    const tempFilePath = path.join(__dirname, 'nyx_video.mp4');
-    const videoData = await axios({
-      url: videoUrl,
-      responseType: 'arraybuffer'
-    });
+    let apiURL;
+    
+    if (type === "ytmp4" && quality) {
+      // For video with specific quality
+      apiURL = `https://koja-api.web-server.xyz/${type}?url=${encodeURIComponent(url)}&quality=${quality}`;
+    } else {
+      // For audio or default video
+      apiURL = `https://koja-api.web-server.xyz/${type}?url=${encodeURIComponent(url)}`;
+    }
 
-    fs.writeFileSync(tempFilePath, videoData.data);
-    await message.reply({
-      body: "Here is YouTube video",
-      attachment: fs.createReadStream(tempFilePath)
-    });
-    fs.unlinkSync(tempFilePath);
+    console.log("Requesting API:", apiURL);
+    const { data } = await axios.get(apiURL);
+    
+    // Check if requested quality is available
+    if (type === "ytmp4" && quality && data.download?.availableQuality) {
+      const availableQualities = data.download.availableQuality;
+      const requestedQuality = parseInt(quality);
+      
+      if (!availableQualities.includes(requestedQuality)) {
+        // Find the closest lower quality
+        const lowerQualities = availableQualities.filter(q => q <= requestedQuality);
+        const bestQuality = lowerQualities.length > 0 ? 
+          Math.max(...lowerQualities) : Math.min(...availableQualities);
+        
+        // Retry with best available quality
+        apiURL = `https://koja-api.web-server.xyz/${type}?url=${encodeURIComponent(url)}&quality=${bestQuality}`;
+        const { data: newData } = await axios.get(apiURL);
+        return await processDownload(newData, type, message, waitMsgID, bestQuality.toString());
+      }
+    }
 
-  } catch (error) {
-    await message.reply("❌ Failed to download video.");
+    await processDownload(data, type, message, waitMsgID, quality);
+
+  } catch (err) {
+    console.error("Download failed:", err);
+    message.reply("⚠️ Error downloading file.");
   }
 }
 
-async function downloadYouTubeAudio(videoId, message) {
+// 📦 Process Download
+async function processDownload(apiData, type, message, waitMsgID, quality) {
   try {
-    const response = await axios.get(`https://www.noobz-api.rf.gd/api/ytv?d=https://www.youtube.com/watch?v=${videoId}&type=mp3`);
-    const audioUrl = response.data.url;
-    const tempFilePath = path.join(__dirname, 'nyx_audio.mp3');
-    const audioData = await axios({
-      url: audioUrl,
-      responseType: 'arraybuffer'
+    const dlURL = apiData.download?.url;
+    
+    if (!apiData.success || !dlURL) {
+      return message.reply("❌ Failed to fetch file from API.");
+    }
+
+    const ext = type === "ytmp3" ? "mp3" : "mp4";
+    const fileName = `${Date.now()}.${ext}`;
+    const filePath = path.join(__dirname, "cache", fileName);
+
+    console.log("Downloading from:", dlURL);
+    const res = await axios.get(dlURL, { 
+      responseType: "stream",
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+    
+    const writer = fs.createWriteStream(filePath);
+    res.data.pipe(writer);
+    
+    await new Promise((resolve, reject) => {
+      writer.on("finish", resolve);
+      writer.on("error", reject);
     });
 
-    fs.writeFileSync(tempFilePath, audioData.data);
+    try {
+      await message.unsend(waitMsgID);
+    } catch (e) {}
+
+    const fileSize = (fs.statSync(filePath).size / (1024 * 1024)).toFixed(2);
+    
+    let body = 
+      `🎵 ${apiData.metadata.title}\n` +
+      `📺 Channel: ${apiData.metadata.author.name}\n` +
+      `⏱ Duration: ${apiData.metadata.duration.timestamp}\n`;
+    
+    if (type === "ytmp4") {
+      body += `📥 Quality: ${quality}p\n`;
+    }
+    
+    body += `📦 Size: ${fileSize}MB\n\n` +
+      `🔰 Api: ALI KOJA | Made by Mueid Mursalin Rifat 😺`;
+
     await message.reply({
-      body: "🎵 Audio downloaded",
-      attachment: fs.createReadStream(tempFilePath)
+      body: body,
+      attachment: fs.createReadStream(filePath)
     });
-    fs.unlinkSync(tempFilePath);
 
-  } catch (error) {
-    await message.reply("❌ Failed to download audio.");
+    fs.unlinkSync(filePath);
+
+  } catch (err) {
+    console.error("Process download error:", err);
+    message.reply("⚠️ Error processing download.");
   }
-}
-
-async function getVideoInfo(videoId) {
-  const video = await yts({ videoId });
-  return {
-    title: video.title,
-    duration: video.duration.timestamp,
-    views: video.views,
-    uploadDate: video.uploadDate,
-    thumbnail: video.thumbnail
-  };
-}
-
-async function getStreamFromURL(url) {
-  const response = await axios({ url, responseType: 'stream' });
-  return response.data;
-}
-
-function extractVideoId(url) {
-  const match = url.match(/[?&]v=([^&]+)/);
-  return match ? match[1] : url.split("/").pop();
-		  }
+		}
